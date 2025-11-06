@@ -20,7 +20,7 @@ from boltz.data import const
 from boltz.data.mol import load_molecules
 from boltz.data.parse.mmcif import parse_mmcif
 from boltz.data.parse.pdb import parse_pdb
-from boltz.data.parse.conformer_cache import get_mol_with_conformer
+from boltz.data.parse.cache import get_mol_with_conformer, get_polymer_with_cache
 
 from boltz.data.types import (
     AffinityInfo,
@@ -1175,7 +1175,7 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
             cyclic = items[0][entity_type].get("cyclic", False)
 
             # Parse a polymer
-            parsed_chain = parse_polymer(
+            parsed_chain = get_polymer_with_cache(
                 sequence=seq,
                 raw_sequence=raw_seq,
                 entity=entity_id,
@@ -1183,6 +1183,7 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
                 components=ccd,
                 cyclic=cyclic,
                 mol_dir=mol_dir,
+                cache_dir=cache_dir,
             )
 
         # Parse a non-polymer
