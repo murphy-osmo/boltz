@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Optional
 
 import yaml
 from rdkit.Chem.rdchem import Mol
@@ -12,6 +13,7 @@ def parse_yaml(
     ccd: dict[str, Mol],
     mol_dir: Path,
     boltz2: bool = False,
+    cache_dir: Optional[Path] = None,
 ) -> Target:
     """Parse a Boltz input yaml / json.
 
@@ -54,6 +56,8 @@ def parse_yaml(
         Dictionary of CCD components.
     boltz2 : bool
         Whether to parse the input for Boltz2.
+    cache_dir : Path, optional
+        The cache directory for conformer caching.
 
     Returns
     -------
@@ -65,4 +69,4 @@ def parse_yaml(
         data = yaml.safe_load(file)
 
     name = path.stem
-    return parse_boltz_schema(name, data, ccd, mol_dir, boltz2)
+    return parse_boltz_schema(name, data, ccd, mol_dir, boltz2, cache_dir)

@@ -20,6 +20,7 @@ from boltz.data import const
 from boltz.data.mol import load_molecules
 from boltz.data.parse.mmcif import parse_mmcif
 from boltz.data.parse.pdb import parse_pdb
+from boltz.data.parse.conformer_cache import get_mol_with_conformer
 
 from boltz.data.types import (
     AffinityInfo,
@@ -944,6 +945,7 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
     ccd: Mapping[str, Mol],
     mol_dir: Optional[Path] = None,
     boltz_2: bool = False,
+    cache_dir: Optional[Path] = None,
 ) -> Target:
     """Parse a Boltz input yaml / json.
 
@@ -995,6 +997,8 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
         Path to the directory containing the molecules.
     boltz2: bool
         Whether to parse the input for Boltz2.
+    cache_dir : Path, optional
+        The cache directory for conformer caching.
 
     Returns
     -------
@@ -1239,8 +1243,8 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
             if affinity:
                 seq = standardize(seq)
 
-            mol = AllChem.MolFromSmiles(seq)
-            mol = AllChem.AddHs(mol)
+            # Use conformer cache to get molecule with 3D conformer
+            mol = get_mol_with_conformer(seq, affinity, cache_dir)
 
             # Set atom names
             canonical_order = AllChem.CanonicalRankAtoms(mol)
@@ -1254,11 +1258,6 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
                     )
                     raise ValueError(msg)
                 atom.SetProp("name", atom_name)
-
-            success = compute_3d_conformer(mol)
-            if not success:
-                msg = f"Failed to compute 3D conformer for {seq}"
-                raise ValueError(msg)
 
             mol_no_h = AllChem.RemoveHs(mol, sanitize=False)
 
