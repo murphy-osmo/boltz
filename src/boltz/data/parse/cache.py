@@ -12,8 +12,6 @@ from rdkit.Chem import AllChem
 if TYPE_CHECKING:
     from boltz.data.parse.schema import ParsedChain
 
-from boltz.data.parse.schema import compute_3d_conformer, parse_polymer
-
 LRU_CACHE_SIZE = 64
 
 
@@ -44,6 +42,9 @@ def _load_conformer_from_cache(
     ValueError
         If conformer generation fails
     """
+    # Late import to avoid circular dependency
+    from boltz.data.parse.schema import compute_3d_conformer
+
     # Create mol with hydrogens
     mol = AllChem.MolFromSmiles(smiles)
     mol = AllChem.AddHs(mol)
@@ -202,6 +203,7 @@ def _load_polymer_from_cache(
 
     # Determine cache path
     polymer_cache_dir = cache_dir / "polymers"
+    polymer_cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = polymer_cache_dir / f"{cache_hash}.pkl"
 
     # Try to load from cache
@@ -280,6 +282,9 @@ def get_polymer_with_cache(
         The parsed chain object
 
     """
+    # Late import to avoid circular dependency
+    from boltz.data.parse.schema import parse_polymer
+
     # Convert to hashable types for cache lookup
     sequence_tuple = tuple(sequence)
     cache_dir_str = str(cache_dir) if cache_dir is not None else None
