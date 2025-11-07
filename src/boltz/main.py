@@ -542,13 +542,14 @@ def process_input(  # noqa: C901, PLR0912, PLR0915, D103
     processed_mols_dir: Path,
     structure_dir: Path,
     records_dir: Path,
+    cache_dir: Optional[Path] = None,
 ) -> None:
     try:
         # Parse data
         if path.suffix.lower() in (".fa", ".fas", ".fasta"):
-            target = parse_fasta(path, ccd, mol_dir, boltz2)
+            target = parse_fasta(path, ccd, mol_dir, boltz2, cache_dir)
         elif path.suffix.lower() in (".yml", ".yaml"):
-            target = parse_yaml(path, ccd, mol_dir, boltz2)
+            target = parse_yaml(path, ccd, mol_dir, boltz2, cache_dir)
         elif path.is_dir():
             msg = f"Found directory {path} instead of .fasta or .yaml, skipping."
             raise RuntimeError(msg)  # noqa: TRY301
@@ -677,6 +678,7 @@ def process_inputs(
     api_key_value: Optional[str] = None,
     boltz2: bool = False,
     preprocessing_threads: int = 1,
+    cache_dir: Optional[Path] = None,
 ) -> Manifest:
     """Process the input data and output directory.
 
@@ -789,6 +791,7 @@ def process_inputs(
         processed_mols_dir=processed_mols_dir,
         structure_dir=structure_dir,
         records_dir=records_dir,
+        cache_dir=cache_dir,
     )
 
     # Parse input data
@@ -1174,6 +1177,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
         boltz2=model == "boltz2",
         preprocessing_threads=preprocessing_threads,
         max_msa_seqs=max_msa_seqs,
+        cache_dir=cache,
     )
 
     # Load manifest

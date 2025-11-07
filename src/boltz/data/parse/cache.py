@@ -59,26 +59,23 @@ def _load_conformer_from_cache(
 
     cache_dir = Path(cache_dir_str)
 
-    # Generate InChIKey for cache lookup
+    # Generate cache hash from SMILES + affinity flag
     try:
-        mol_no_h = AllChem.RemoveHs(mol)
-        inchi_key = Chem.MolToInChIKey(mol_no_h)
+        cache_key_data = (smiles, affinity)
+        cache_key_str = str(cache_key_data).encode("utf-8")
+        cache_hash = hashlib.sha256(cache_key_str).hexdigest()[:16]
     except Exception as e:
-        print(f"WARNING: Failed to generate InChIKey for {smiles}: {e}. Computing conformer without caching.")
+        print(f"WARNING: Failed to generate cache key for {smiles}: {e}. Computing conformer without caching.")
         success = compute_3d_conformer(mol)
         if not success:
             msg = f"Failed to compute 3D conformer for {smiles}"
             raise ValueError(msg)
         return mol
 
-    # Determine cache path based on affinity
-    if affinity:
-        conformer_cache_dir = cache_dir / "conformers" / "affinity"
-    else:
-        conformer_cache_dir = cache_dir / "conformers"
-
+    # Use single conformers directory (affinity flag already in hash)
+    conformer_cache_dir = cache_dir / "conformers"
     conformer_cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = conformer_cache_dir / f"{inchi_key}.pkl"
+    cache_path = conformer_cache_dir / f"{cache_hash}.pkl"
 
     # Try to load from cache
     if cache_path.exists():
@@ -88,16 +85,14 @@ def _load_conformer_from_cache(
 
             cached_mol = cached_data["mol"]
             cached_smiles = cached_data["smiles"]
+            cached_affinity = cached_data["affinity"]
 
-            # Check for hash collision by comparing canonical SMILES
-            mol_canonical = Chem.MolToSmiles(mol_no_h)
-            cached_canonical = Chem.MolToSmiles(AllChem.RemoveHs(cached_mol))
-
-            if mol_canonical != cached_canonical:
+            # Check for hash collision by comparing SMILES and affinity
+            if smiles != cached_smiles or affinity != cached_affinity:
                 print(
-                    f"WARNING: InChIKey collision detected for {inchi_key}!\n"
-                    f"  Query SMILES: {smiles} (canonical: {mol_canonical})\n"
-                    f"  Cached SMILES: {cached_smiles} (canonical: {cached_canonical})\n"
+                    f"WARNING: Hash collision detected for {cache_hash}!\n"
+                    f"  Query: smiles={smiles}, affinity={affinity}\n"
+                    f"  Cached: smiles={cached_smiles}, affinity={cached_affinity}\n"
                     f"  Overwriting cache with new molecule."
                 )
             else:
@@ -118,6 +113,7 @@ def _load_conformer_from_cache(
         cache_data = {
             "mol": mol,
             "smiles": smiles,
+            "affinity": affinity,
         }
         with cache_path.open("wb") as f:
             pickle.dump(cache_data, f)
@@ -134,8 +130,7 @@ def get_mol_with_conformer(
 ) -> Chem.Mol:
     """Get a molecule with 3D conformer, using cache if available.
 
-    This function caches conformers based on the InChIKey of the molecule.
-    If affinity is True, conformers are stored in a separate 'affinity' subdirectory.
+    This function caches conformers based on a hash of (SMILES, affinity).
 
     Parameters
     ----------
@@ -196,7 +191,8 @@ def _load_polymer_from_cache(
     try:
         cache_key_data = (sequence_tuple, chain_type, cyclic)
         cache_key_str = str(cache_key_data).encode("utf-8")
-        cache_hash = hashlib.sha256(cache_key_str).hexdigest()
+        # Use first 16 characters for shorter filenames
+        cache_hash = hashlib.sha256(cache_key_str).hexdigest()[:16]
     except Exception as e:
         print(f"WARNING: Failed to generate cache key for polymer: {e}.")
         return None
@@ -313,7 +309,8 @@ def get_polymer_with_cache(
             # Recreate cache path (same logic as in _load_polymer_from_cache)
             cache_key_data = (sequence_tuple, chain_type, cyclic)
             cache_key_str = str(cache_key_data).encode("utf-8")
-            cache_hash = hashlib.sha256(cache_key_str).hexdigest()
+            # Use first 16 characters for shorter filenames
+            cache_hash = hashlib.sha256(cache_key_str).hexdigest()[:16]
 
             polymer_cache_dir = cache_dir / "polymers"
             polymer_cache_dir.mkdir(parents=True, exist_ok=True)
