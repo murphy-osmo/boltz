@@ -2,6 +2,7 @@
 
 import hashlib
 import pickle
+from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -290,7 +291,9 @@ def get_polymer_with_cache(
         sequence_tuple, chain_type, cyclic, cache_dir_str
     )
     if cached_chain is not None:
-        return cached_chain
+        # Update the entity field to match the current context
+        # The cached chain may have a different entity ID from a previous parse
+        return replace(cached_chain, entity=entity)
 
     # Cache miss - parse the polymer
     parsed_chain = parse_polymer(
