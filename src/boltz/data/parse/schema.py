@@ -20,7 +20,7 @@ from boltz.data import const
 from boltz.data.mol import load_molecules
 from boltz.data.parse.mmcif import parse_mmcif
 from boltz.data.parse.pdb import parse_pdb
-from boltz.data.parse.cache import get_mol_with_conformer, get_polymer_with_cache
+from boltz.data.parse.cache import get_mol_with_conformer, get_polymer_with_cache, get_template_with_cache
 
 from boltz.data.types import (
     AffinityInfo,
@@ -1658,22 +1658,15 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
                 raise ValueError(msg)
 
         # Get relevant template chain ids
-        if pdb:
-            parsed_template = parse_pdb(
-                path,
-                mols=ccd,
-                moldir=mol_dir,
-                use_assembly=False,
-                compute_interfaces=False,
-            )
-        else:
-            parsed_template = parse_mmcif(
-                path,
-                mols=ccd,
-                moldir=mol_dir,
-                use_assembly=False,
-                compute_interfaces=False,
-            )
+        # Use cached template parsing
+        parsed_template = get_template_with_cache(
+            template_path=path,
+            mols=ccd,
+            moldir=mol_dir,
+            use_assembly=False,
+            compute_interfaces=False,
+            cache_dir=cache_dir,
+        )
         template_proteins = {
             str(c["name"])
             for c in parsed_template.data.chains

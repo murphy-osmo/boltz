@@ -1,4 +1,4 @@
-"""Caching functionality for conformers and parsed polymers."""
+"""Caching functionality for conformers, parsed polymers, and templates."""
 
 import hashlib
 import pickle
@@ -12,6 +12,7 @@ from rdkit.Chem import AllChem
 
 if TYPE_CHECKING:
     from boltz.data.parse.schema import ParsedChain
+    from boltz.data.parse.mmcif import ParsedStructure
 
 LRU_CACHE_SIZE = 64
 
@@ -331,3 +332,223 @@ def get_polymer_with_cache(
             print(f"WARNING: Failed to cache polymer: {e}")
 
     return parsed_chain
+
+
+def _compute_file_checksum(file_path: Path) -> str:
+    """Compute SHA256 checksum of a file.
+
+    Parameters
+    ----------
+    file_path : Path
+        The path to the file
+
+    Returns
+    -------
+    str
+        The SHA256 checksum (hex string)
+
+    """
+    sha256 = hashlib.sha256()
+    with file_path.open("rb") as f:
+        # Read in chunks to handle large files
+        for chunk in iter(lambda: f.read(8192), b""):
+            sha256.update(chunk)
+    return sha256.hexdigest()[:16]
+
+
+@lru_cache(maxsize=LRU_CACHE_SIZE)
+def _load_template_from_cache(
+    template_path_str: str,
+    checksum: str,
+    use_assembly: bool,
+    compute_interfaces: bool,
+    cache_dir_str: Optional[str],
+) -> Optional["ParsedStructure"]:
+    """Load template from disk cache. LRU cached in-memory.
+
+    Parameters
+    ----------
+    template_path_str : str
+        The absolute path to the template file
+    checksum : str
+        The SHA256 checksum of the template file
+    use_assembly : bool
+        Whether to use biological assembly
+    compute_interfaces : bool
+        Whether to compute interfaces
+    cache_dir_str : str, optional
+        String path to cache directory. If None, returns None.
+
+    Returns
+    -------
+    ParsedStructure, optional
+        The cached parsed template, or None if not cached
+
+    """
+    # If no cache directory, return None (no cache available)
+    if cache_dir_str is None:
+        return None
+
+    cache_dir = Path(cache_dir_str)
+
+    # Generate SHA256 hash for cache lookup
+    try:
+        cache_key_data = (template_path_str, checksum, use_assembly, compute_interfaces)
+        cache_key_str = str(cache_key_data).encode("utf-8")
+        # Use first 16 characters for shorter filenames
+        cache_hash = hashlib.sha256(cache_key_str).hexdigest()[:16]
+    except Exception as e:
+        print(f"WARNING: Failed to generate cache key for template: {e}.")
+        return None
+
+    # Determine cache path
+    template_cache_dir = cache_dir / "templates"
+    template_cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = template_cache_dir / f"{cache_hash}.pkl"
+
+    # Try to load from cache
+    if cache_path.exists():
+        try:
+            with cache_path.open("rb") as f:
+                cached_data = pickle.load(f)
+
+            cached_template = cached_data["template"]
+            cached_path = cached_data["path"]
+            cached_checksum = cached_data["checksum"]
+            cached_use_assembly = cached_data["use_assembly"]
+            cached_compute_interfaces = cached_data["compute_interfaces"]
+
+            # Check for hash collision or file modification by comparing inputs
+            if (
+                template_path_str == cached_path
+                and checksum == cached_checksum
+                and use_assembly == cached_use_assembly
+                and compute_interfaces == cached_compute_interfaces
+            ):
+                # Cache hit with matching template
+                print(f"Using cached template: {Path(template_path_str).name}")
+                return cached_template
+            else:
+                print(
+                    f"WARNING: Cache collision or template file modification detected for hash {cache_hash}!\n"
+                    f"  Query: path={template_path_str}, checksum={checksum}, use_assembly={use_assembly}, compute_interfaces={compute_interfaces}\n"
+                    f"  Cached: path={cached_path}, checksum={cached_checksum}, use_assembly={cached_use_assembly}, compute_interfaces={cached_compute_interfaces}\n"
+                    f"  Will overwrite cache with new template."
+                )
+                return None
+
+        except Exception as e:
+            print(f"WARNING: Failed to load cached template from {cache_path}: {e}.")
+            return None
+
+    # Cache miss
+    return None
+
+
+def get_template_with_cache(
+    template_path: str,
+    mols: dict[str, Chem.Mol],
+    moldir: Optional[str],
+    use_assembly: bool,
+    compute_interfaces: bool,
+    cache_dir: Optional[Path] = None,
+) -> "ParsedStructure":
+    """Get a parsed template structure, using cache if available.
+
+    This function caches parsed templates based on a SHA256 hash of
+    (template_path, file_checksum, use_assembly, compute_interfaces).
+
+    Parameters
+    ----------
+    template_path : str
+        The path to the template file (PDB or CIF)
+    mols : dict[str, Mol]
+        The CCD components dictionary
+    moldir : str, optional
+        Path to the molecule directory
+    use_assembly : bool
+        Whether to use biological assembly
+    compute_interfaces : bool
+        Whether to compute interfaces
+    cache_dir : Path, optional
+        The cache directory. If None, no caching is performed.
+
+    Returns
+    -------
+    ParsedStructure
+        The parsed template structure
+
+    """
+    # Late imports to avoid circular dependency
+    from boltz.data.parse.pdb import parse_pdb
+    from boltz.data.parse.mmcif import parse_mmcif
+
+    # Get absolute path
+    template_path_obj = Path(template_path).resolve()
+    template_path_str = str(template_path_obj)
+
+    # Compute file checksum for cache key
+    try:
+        checksum = _compute_file_checksum(template_path_obj)
+    except Exception as e:
+        print(f"WARNING: Failed to compute checksum for {template_path}: {e}. Proceeding without cache.")
+        checksum = ""
+
+    # Convert to hashable types for cache lookup
+    cache_dir_str = str(cache_dir) if cache_dir is not None else None
+
+    # Try to load from cache
+    cached_template = _load_template_from_cache(
+        template_path_str, checksum, use_assembly, compute_interfaces, cache_dir_str
+    )
+    if cached_template is not None:
+        return cached_template
+
+    # Cache miss - parse the template
+    print(f"Parsing template: {template_path_obj.name}")
+    is_pdb = template_path_obj.suffix.lower() in {".pdb", ".ent"}
+
+    if is_pdb:
+        parsed_template = parse_pdb(
+            path=template_path,
+            mols=mols,
+            moldir=moldir,
+            use_assembly=use_assembly,
+            compute_interfaces=compute_interfaces,
+        )
+    else:
+        parsed_template = parse_mmcif(
+            path=template_path,
+            mols=mols,
+            moldir=moldir,
+            use_assembly=use_assembly,
+            compute_interfaces=compute_interfaces,
+        )
+
+    # Save to disk cache
+    if cache_dir is not None and checksum:
+        try:
+            # Recreate cache path (same logic as in _load_template_from_cache)
+            cache_key_data = (template_path_str, checksum, use_assembly, compute_interfaces)
+            cache_key_str = str(cache_key_data).encode("utf-8")
+            # Use first 16 characters for shorter filenames
+            cache_hash = hashlib.sha256(cache_key_str).hexdigest()[:16]
+
+            template_cache_dir = cache_dir / "templates"
+            template_cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_path = template_cache_dir / f"{cache_hash}.pkl"
+
+            cache_data = {
+                "template": parsed_template,
+                "path": template_path_str,
+                "checksum": checksum,
+                "use_assembly": use_assembly,
+                "compute_interfaces": compute_interfaces,
+            }
+            with cache_path.open("wb") as f:
+                pickle.dump(cache_data, f)
+            print(f"Cached template: {template_path_obj.name}")
+        except Exception as e:
+            print(f"WARNING: Failed to cache template: {e}")
+
+    return parsed_template
