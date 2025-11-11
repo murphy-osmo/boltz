@@ -371,19 +371,19 @@ def _compute_file_checksum(file_path: Path) -> str:
 @lru_cache(maxsize=LRU_CACHE_SIZE)
 def _load_template_from_cache(
     template_path_str: str,
-    checksum: str,
     use_assembly: bool,
     compute_interfaces: bool,
     cache_dir_str: Optional[str],
 ) -> Optional["ParsedStructure"]:
     """Load template from disk cache. LRU cached in-memory.
 
+    Note: Checksum validation only happens at disk read stage, not for LRU lookups.
+    We assume files won't change during a single run.
+
     Parameters
     ----------
     template_path_str : str
         The absolute path to the template file
-    checksum : str
-        The SHA256 checksum of the template file
     use_assembly : bool
         Whether to use biological assembly
     compute_interfaces : bool
@@ -402,10 +402,11 @@ def _load_template_from_cache(
         return None
 
     cache_dir = Path(cache_dir_str)
+    template_path_obj = Path(template_path_str)
 
-    # Generate SHA256 hash for cache lookup
+    # Generate SHA256 hash for cache lookup (without checksum in key for LRU)
     try:
-        cache_key_data = (template_path_str, checksum, use_assembly, compute_interfaces)
+        cache_key_data = (template_path_str, use_assembly, compute_interfaces)
         cache_key_str = str(cache_key_data).encode("utf-8")
         # Use first 16 characters for shorter filenames
         cache_hash = hashlib.sha256(cache_key_str).hexdigest()[:16]
@@ -430,20 +431,23 @@ def _load_template_from_cache(
             cached_use_assembly = cached_data["use_assembly"]
             cached_compute_interfaces = cached_data["compute_interfaces"]
 
+            # Verify checksum to detect file changes (only at disk read stage)
+            current_checksum = _compute_file_checksum(template_path_obj)
+
             # Check for hash collision or file modification by comparing inputs
             if (
                 template_path_str == cached_path
-                and checksum == cached_checksum
+                and current_checksum == cached_checksum
                 and use_assembly == cached_use_assembly
                 and compute_interfaces == cached_compute_interfaces
             ):
                 # Cache hit with matching template
-                print(f"Using cached template: {Path(template_path_str).name}")
+                print(f"Using cached template: {template_path_obj.name}")
                 return cached_template
             else:
                 print(
                     f"WARNING: Cache collision or template file modification detected for hash {cache_hash}!\n"
-                    f"  Query: path={template_path_str}, checksum={checksum}, use_assembly={use_assembly}, compute_interfaces={compute_interfaces}\n"
+                    f"  Query: path={template_path_str}, checksum={current_checksum}, use_assembly={use_assembly}, compute_interfaces={compute_interfaces}\n"
                     f"  Cached: path={cached_path}, checksum={cached_checksum}, use_assembly={cached_use_assembly}, compute_interfaces={cached_compute_interfaces}\n"
                     f"  Will overwrite cache with new template."
                 )
@@ -467,8 +471,8 @@ def get_template_with_cache(
 ) -> "ParsedStructure":
     """Get a parsed template structure, using cache if available.
 
-    This function caches parsed templates based on a SHA256 hash of
-    (template_path, file_checksum, use_assembly, compute_interfaces).
+    This function caches parsed templates. Checksums are computed only at disk
+    read stage to detect file changes between runs.
 
     Parameters
     ----------
@@ -499,19 +503,12 @@ def get_template_with_cache(
     template_path_obj = Path(template_path).resolve()
     template_path_str = str(template_path_obj)
 
-    # Compute file checksum for cache key
-    try:
-        checksum = _compute_file_checksum(template_path_obj)
-    except Exception as e:
-        print(f"WARNING: Failed to compute checksum for {template_path}: {e}. Proceeding without cache.")
-        checksum = ""
-
     # Convert to hashable types for cache lookup
     cache_dir_str = str(cache_dir) if cache_dir is not None else None
 
-    # Try to load from cache
+    # Try to load from cache (checksum validation happens inside at disk read)
     cached_template = _load_template_from_cache(
-        template_path_str, checksum, use_assembly, compute_interfaces, cache_dir_str
+        template_path_str, use_assembly, compute_interfaces, cache_dir_str
     )
     if cached_template is not None:
         return cached_template
@@ -537,11 +534,14 @@ def get_template_with_cache(
             compute_interfaces=compute_interfaces,
         )
 
-    # Save to disk cache
-    if cache_dir is not None and checksum:
+    # Save to disk cache (compute checksum for storage)
+    if cache_dir is not None:
         try:
+            # Compute checksum for cache storage
+            checksum = _compute_file_checksum(template_path_obj)
+
             # Recreate cache path (same logic as in _load_template_from_cache)
-            cache_key_data = (template_path_str, checksum, use_assembly, compute_interfaces)
+            cache_key_data = (template_path_str, use_assembly, compute_interfaces)
             cache_key_str = str(cache_key_data).encode("utf-8")
             # Use first 16 characters for shorter filenames
             cache_hash = hashlib.sha256(cache_key_str).hexdigest()[:16]
