@@ -1,4 +1,4 @@
-"""Caching functionality for conformers, parsed polymers, and templates."""
+"""Caching functionality for conformers, parsed polymers, templates, and MSAs."""
 
 import hashlib
 import pickle
@@ -13,6 +13,7 @@ from rdkit.Chem import AllChem
 if TYPE_CHECKING:
     from boltz.data.parse.schema import ParsedChain
     from boltz.data.parse.mmcif import ParsedStructure
+    from boltz.data.types import MSA
 
 LRU_CACHE_SIZE = 64
 
@@ -564,3 +565,193 @@ def get_template_with_cache(
             print(f"WARNING: Failed to cache template: {e}")
 
     return parsed_template
+
+
+@lru_cache(maxsize=LRU_CACHE_SIZE)
+def _load_msa_from_cache(
+    msa_path_str: str,
+    max_seqs: Optional[int],
+    cache_dir_str: Optional[str],
+) -> Optional["MSA"]:
+    """Load MSA from disk cache. LRU cached in-memory.
+
+    Note: Checksum validation only happens at disk read stage, not for LRU lookups.
+    We assume files won't change during a single run.
+
+    Parameters
+    ----------
+    msa_path_str : str
+        The absolute path to the MSA file
+    max_seqs : int, optional
+        Maximum number of sequences to include
+    cache_dir_str : str, optional
+        String path to cache directory. If None, returns None.
+
+    Returns
+    -------
+    MSA, optional
+        The cached parsed MSA, or None if not cached
+
+    """
+    # If no cache directory, return None (no cache available)
+    if cache_dir_str is None:
+        return None
+
+    cache_dir = Path(cache_dir_str)
+    msa_path_obj = Path(msa_path_str)
+
+    # Generate SHA256 hash for cache lookup (without checksum in key for LRU)
+    try:
+        cache_key_data = (msa_path_str, max_seqs)
+        cache_key_str = str(cache_key_data).encode("utf-8")
+        # Use first 16 characters for shorter filenames
+        cache_hash = hashlib.sha256(cache_key_str).hexdigest()[:16]
+    except Exception as e:
+        print(f"WARNING: Failed to generate cache key for MSA: {e}.")
+        return None
+
+    # Determine cache path
+    msa_cache_dir = cache_dir / "msa"
+    msa_cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = msa_cache_dir / f"{cache_hash}.npz"
+
+    # Try to load from cache
+    if cache_path.exists():
+        try:
+            # Load from NPZ (MSA has a load method from NumpySerializable)
+            from boltz.data.types import MSA
+
+            cached_msa = MSA.load(cache_path)
+
+            # Verify checksum to detect file changes (only at disk read stage)
+            # Read cached metadata from a separate pickle file
+            metadata_path = msa_cache_dir / f"{cache_hash}.meta"
+            if metadata_path.exists():
+                with metadata_path.open("rb") as f:
+                    cached_meta = pickle.load(f)
+
+                cached_path = cached_meta["path"]
+                cached_checksum = cached_meta["checksum"]
+                cached_max_seqs = cached_meta["max_seqs"]
+
+                # Verify checksum
+                current_checksum = _compute_file_checksum(msa_path_obj)
+
+                # Check for hash collision or file modification by comparing inputs
+                if (
+                    msa_path_str == cached_path
+                    and current_checksum == cached_checksum
+                    and max_seqs == cached_max_seqs
+                ):
+                    # Cache hit with matching MSA
+                    print(f"Using cached MSA: {msa_path_obj.name}")
+                    return cached_msa
+                else:
+                    print(
+                        f"WARNING: Cache collision or MSA file modification detected for hash {cache_hash}!\n"
+                        f"  Query: path={msa_path_str}, checksum={current_checksum}, max_seqs={max_seqs}\n"
+                        f"  Cached: path={cached_path}, checksum={cached_checksum}, max_seqs={cached_max_seqs}\n"
+                        f"  Will overwrite cache with new MSA."
+                    )
+                    return None
+            else:
+                # No metadata file - cache invalid
+                print(f"WARNING: MSA cache metadata missing for {cache_hash}. Re-parsing.")
+                return None
+
+        except Exception as e:
+            print(f"WARNING: Failed to load cached MSA from {cache_path}: {e}.")
+            return None
+
+    # Cache miss
+    return None
+
+
+def get_msa_with_cache(
+    msa_path: Path,
+    max_seqs: Optional[int] = None,
+    cache_dir: Optional[Path] = None,
+) -> "MSA":
+    """Get a parsed MSA, using cache if available.
+
+    This function caches parsed MSAs. Checksums are computed only at disk
+    read stage to detect file changes between runs.
+
+    Parameters
+    ----------
+    msa_path : Path
+        The path to the MSA file (.a3m, .a3m.gz, or .csv)
+    max_seqs : int, optional
+        Maximum number of sequences to include
+    cache_dir : Path, optional
+        The cache directory. If None, no caching is performed.
+
+    Returns
+    -------
+    MSA
+        The parsed MSA object
+
+    """
+    # Late imports to avoid circular dependency
+    from boltz.data.parse.a3m import parse_a3m
+    from boltz.data.parse.csv import parse_csv
+
+    # Get absolute path
+    msa_path_obj = Path(msa_path).resolve()
+    msa_path_str = str(msa_path_obj)
+
+    # Convert to hashable types for cache lookup
+    cache_dir_str = str(cache_dir) if cache_dir is not None else None
+
+    # Try to load from cache (checksum validation happens inside at disk read)
+    cached_msa = _load_msa_from_cache(msa_path_str, max_seqs, cache_dir_str)
+    if cached_msa is not None:
+        return cached_msa
+
+    # Cache miss - parse the MSA
+    print(f"Parsing MSA: {msa_path_obj.name}")
+
+    # Parse based on file type
+    if msa_path_obj.suffix == ".csv":
+        parsed_msa = parse_csv(msa_path_obj, max_seqs=max_seqs)
+    elif msa_path_obj.suffix in {".a3m", ".gz"}:
+        # taxonomy is always None in main.py, so we hardcode it
+        parsed_msa = parse_a3m(msa_path_obj, taxonomy=None, max_seqs=max_seqs)
+    else:
+        msg = f"MSA file {msa_path_obj} not supported, only .a3m, .a3m.gz, or .csv."
+        raise ValueError(msg)
+
+    # Save to disk cache
+    if cache_dir is not None:
+        try:
+            # Compute checksum for cache storage
+            checksum = _compute_file_checksum(msa_path_obj)
+
+            # Recreate cache path (same logic as in _load_msa_from_cache)
+            cache_key_data = (msa_path_str, max_seqs)
+            cache_key_str = str(cache_key_data).encode("utf-8")
+            # Use first 16 characters for shorter filenames
+            cache_hash = hashlib.sha256(cache_key_str).hexdigest()[:16]
+
+            msa_cache_dir = cache_dir / "msa"
+            msa_cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_path = msa_cache_dir / f"{cache_hash}.npz"
+            metadata_path = msa_cache_dir / f"{cache_hash}.meta"
+
+            # Save MSA to NPZ
+            parsed_msa.dump(cache_path)
+
+            # Save metadata to pickle
+            cache_meta = {
+                "path": msa_path_str,
+                "checksum": checksum,
+                "max_seqs": max_seqs,
+            }
+            with metadata_path.open("wb") as f:
+                pickle.dump(cache_meta, f)
+
+            print(f"Cached MSA: {msa_path_obj.name}")
+        except Exception as e:
+            print(f"WARNING: Failed to cache MSA: {e}")
+
+    return parsed_msa

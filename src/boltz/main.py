@@ -25,6 +25,7 @@ from boltz.data.module.inferencev2 import Boltz2InferenceDataModule
 from boltz.data.mol import load_canonicals
 from boltz.data.msa.mmseqs2 import run_mmseqs2
 from boltz.data.parse.a3m import parse_a3m
+from boltz.data.parse.cache import get_msa_with_cache
 from boltz.data.parse.csv import parse_csv
 from boltz.data.parse.fasta import parse_fasta
 from boltz.data.parse.yaml import parse_yaml
@@ -612,18 +613,12 @@ def process_input(  # noqa: C901, PLR0912, PLR0915, D103
             processed = processed_msa_dir / f"{target_id}_{msa_idx}.npz"
             msa_id_map[msa_id] = f"{target_id}_{msa_idx}"
             if not processed.exists():
-                # Parse A3M
-                if msa_path.suffix == ".a3m":
-                    msa: MSA = parse_a3m(
-                        msa_path,
-                        taxonomy=None,
-                        max_seqs=max_msa_seqs,
-                    )
-                elif msa_path.suffix == ".csv":
-                    msa: MSA = parse_csv(msa_path, max_seqs=max_msa_seqs)
-                else:
-                    msg = f"MSA file {msa_path} not supported, only a3m or csv."
-                    raise RuntimeError(msg)  # noqa: TRY301
+                # Parse MSA with caching
+                msa: MSA = get_msa_with_cache(
+                    msa_path=msa_path,
+                    max_seqs=max_msa_seqs,
+                    cache_dir=cache_dir,
+                )
 
                 msa.dump(processed)
 
