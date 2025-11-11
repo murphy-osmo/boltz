@@ -99,12 +99,16 @@ def _load_conformer_from_cache(
                 )
             else:
                 # Cache hit with matching molecule
+                smiles_short = smiles[:50] + "..." if len(smiles) > 50 else smiles
+                print(f"Using cached conformer: {smiles_short}")
                 return cached_mol
 
         except Exception as e:
             print(f"WARNING: Failed to load cached conformer from {cache_path}: {e}. Regenerating.")
 
     # Cache miss or collision - compute conformer
+    smiles_short = smiles[:50] + "..." if len(smiles) > 50 else smiles
+    print(f"Computing conformer: {smiles_short}")
     success = compute_3d_conformer(mol)
     if not success:
         msg = f"Failed to compute 3D conformer for {smiles}"
@@ -222,6 +226,10 @@ def _load_polymer_from_cache(
                 and cyclic == cached_cyclic
             ):
                 # Cache hit with matching polymer
+                seq_str = "".join(cached_sequence[:20])
+                if len(cached_sequence) > 20:
+                    seq_str += f"... ({len(cached_sequence)} residues)"
+                print(f"Using cached polymer: {seq_str}")
                 return cached_chain
             else:
                 print(
@@ -297,6 +305,10 @@ def get_polymer_with_cache(
         return replace(cached_chain, entity=entity)
 
     # Cache miss - parse the polymer
+    seq_str = raw_sequence[:20]
+    if len(raw_sequence) > 20:
+        seq_str += f"... ({len(sequence)} residues)"
+    print(f"Parsing polymer: {seq_str}")
     parsed_chain = parse_polymer(
         sequence=sequence,
         raw_sequence=raw_sequence,
